@@ -24,9 +24,10 @@ scGPT-spatial V1 weights on [figshare](https://figshare.com/articles/software/sc
 Pretraining dataset names, slide metadata, and access links are summarized in [data source table](https://figshare.com/articles/dataset/Pretraining_Data_Sources_for_SpatialHuman30M/28405961?file=52318895). Processed data will be available upon publication given permission under license of the original data source.
 
 ## 🟦 Setup and Tutorials 🟦
-To start, clone the current repo:
 
-`git clone https://github.com/bowang-lab/scGPT-spatial`
+```sh
+pip install -U git+https://github.com/jkanche/scGPT-spatial@packaging
+```
 
 Special acknowledgement to the scGPT codebase - for environment setup please follow [instructions](https://github.com/bowang-lab/scGPT) there.
 
