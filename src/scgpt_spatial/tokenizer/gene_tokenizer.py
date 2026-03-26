@@ -150,6 +150,14 @@ class GeneVocab(_Vocab):
         specials: Optional[List[str]] = None,
         special_first: bool = True,
     ) -> None:
+        """
+        Populate the vocabulary from a list of gene names.
+
+        Args:
+            gene_list (List[str]): List of gene names to add to the vocabulary.
+            specials (List[str]): Special tokens to add (e.g. "<pad>", "<cls>").
+            special_first (bool): Whether to place special tokens before gene tokens.
+        """
         tokens = []
         if specials is not None and special_first:
             tokens.extend(specials)
