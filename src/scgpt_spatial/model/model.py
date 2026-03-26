@@ -10,7 +10,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.distributions import Bernoulli
-from flash_attn.flash_attention import FlashMHA
+
 from tqdm import trange
 
 from .grad_reverse import grad_reverse
@@ -813,6 +813,8 @@ class FlashTransformerEncoderLayer(nn.Module):
         dtype=None,
         norm_scheme="post",  # "pre" or "post"
     ) -> None:
+        from flash_attn.flash_attention import FlashMHA
+        
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.self_attn = FlashMHA(
