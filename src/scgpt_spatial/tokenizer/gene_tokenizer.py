@@ -1,27 +1,71 @@
 import json
 import pickle
 from pathlib import Path
-from collections import Counter, OrderedDict
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from collections import Counter
+from typing import Dict, List, Optional, Tuple, Union
 from typing_extensions import Self
 
 import numpy as np
 import pandas as pd
 import torch
-import torchtext.vocab as torch_vocab
-from torchtext.vocab import Vocab
 
 from .. import logger
 
 
-class GeneVocab(Vocab):
+class _Vocab:
+    """Minimal vocabulary replacing torchtext.vocab.Vocab."""
+
+    def __init__(self):
+        self._token_to_idx: Dict[str, int] = {}
+        self._idx_to_token: List[str] = []
+        self._default_index: Optional[int] = None
+
+    def __getitem__(self, token: str) -> int:
+        if token in self._token_to_idx:
+            return self._token_to_idx[token]
+        if self._default_index is not None:
+            return self._default_index
+        raise KeyError(f"Token '{token}' not in vocabulary.")
+
+    def __contains__(self, token: str) -> bool:
+        return token in self._token_to_idx
+
+    def __len__(self) -> int:
+        return len(self._token_to_idx)
+
+    def __call__(self, tokens: List[str]) -> List[int]:
+        return [self[t] for t in tokens]
+
+    def append_token(self, token: str) -> None:
+        if token not in self._token_to_idx:
+            idx = len(self._idx_to_token)
+            self._token_to_idx[token] = idx
+            self._idx_to_token.append(token)
+
+    def insert_token(self, token: str, index: int) -> None:
+        if index >= len(self._idx_to_token):
+            self._idx_to_token.extend([None] * (index - len(self._idx_to_token) + 1))
+        self._idx_to_token[index] = token
+        self._token_to_idx[token] = index
+
+    def set_default_index(self, index: int) -> None:
+        self._default_index = index
+
+    def get_stoi(self) -> Dict[str, int]:
+        return dict(self._token_to_idx)
+
+    def lookup_token(self, index: int) -> str:
+        return self._idx_to_token[index]
+
+
+class GeneVocab(_Vocab):
     """
     Vocabulary for genes.
     """
 
     def __init__(
         self,
-        gene_list_or_vocab: Union[List[str], Vocab],
+        gene_list_or_vocab: Union[List[str], "_Vocab"],
         specials: Optional[List[str]] = None,
         special_first: bool = True,
         default_token: Optional[str] = "<pad>",
@@ -39,23 +83,21 @@ class GeneVocab(Vocab):
             default_token (str): Default token, by default will set to "<pad>",
                 if "<pad>" is in the vocabulary.
         """
-        if isinstance(gene_list_or_vocab, Vocab):
-            _vocab = gene_list_or_vocab
+        super().__init__()
+        if isinstance(gene_list_or_vocab, _Vocab):
             if specials is not None:
-                raise ValueError(
-                    "receive non-empty specials when init from a Vocab object."
-                )
+                raise ValueError("receive non-empty specials when init from a Vocab object.")
+            self._token_to_idx = dict(gene_list_or_vocab._token_to_idx)
+            self._idx_to_token = list(gene_list_or_vocab._idx_to_token)
+            self._default_index = gene_list_or_vocab._default_index
         elif isinstance(gene_list_or_vocab, list):
-            _vocab = self._build_vocab_from_iterator(
+            self._build_from_list(
                 gene_list_or_vocab,
                 specials=specials,
                 special_first=special_first,
             )
         else:
-            raise ValueError(
-                "gene_list_or_vocab must be a list of gene names or a Vocab object."
-            )
-        super().__init__(_vocab.vocab)
+            raise ValueError("gene_list_or_vocab must be a list of gene names or a Vocab object.")
         if default_token is not None and default_token in self:
             self.set_default_token(default_token)
 
@@ -76,10 +118,7 @@ class GeneVocab(Vocab):
                 token2idx = json.load(f)
                 return cls.from_dict(token2idx)
         else:
-            raise ValueError(
-                f"{file_path} is not a valid file type. "
-                "Only .pkl and .json are supported."
-            )
+            raise ValueError(f"{file_path} is not a valid file type. Only .pkl and .json are supported.")
 
     @classmethod
     def from_dict(
@@ -105,51 +144,25 @@ class GeneVocab(Vocab):
 
         return _vocab
 
-    def _build_vocab_from_iterator(
+    def _build_from_list(
         self,
-        iterator: Iterable,
-        min_freq: int = 1,
+        gene_list: List[str],
         specials: Optional[List[str]] = None,
         special_first: bool = True,
-    ) -> Vocab:
-        """
-        Build a Vocab from an iterator. This function is modified from
-        torchtext.vocab.build_vocab_from_iterator. The original function always
-        splits tokens into characters, which is not what we want.
-
-        Args:
-            iterator (Iterable): Iterator used to build Vocab. Must yield list
-                or iterator of tokens.
-            min_freq (int): The minimum frequency needed to include a token in
-                the vocabulary.
-            specials (List[str]): Special symbols to add. The order of supplied
-                tokens will be preserved.
-            special_first (bool): Whether to add special tokens to the beginning
-
-        Returns:
-            torchtext.vocab.Vocab: A `Vocab` object
-        """
-
-        counter = Counter()
-        counter.update(iterator)
-
-        if specials is not None:
-            for tok in specials:
-                del counter[tok]
-
-        sorted_by_freq_tuples = sorted(counter.items(), key=lambda x: x[0])
-        sorted_by_freq_tuples.sort(key=lambda x: x[1], reverse=True)
-        ordered_dict = OrderedDict(sorted_by_freq_tuples)
-
-        if specials is not None:
-            if special_first:
-                specials = specials[::-1]
-            for symbol in specials:
-                ordered_dict.update({symbol: min_freq})
-                ordered_dict.move_to_end(symbol, last=not special_first)
-
-        word_vocab = torch_vocab.vocab(ordered_dict, min_freq=min_freq)
-        return word_vocab
+    ) -> None:
+        tokens = []
+        if specials is not None and special_first:
+            tokens.extend(specials)
+        counter = Counter(gene_list)
+        if specials:
+            for s in specials:
+                counter.pop(s, None)
+        tokens.extend(t for t, _ in sorted(counter.items(), key=lambda x: (-x[1], x[0])))
+        if specials is not None and not special_first:
+            tokens.extend(specials)
+        for idx, token in enumerate(tokens):
+            self._token_to_idx[token] = idx
+            self._idx_to_token.append(token)
 
     @property
     def pad_token(self) -> Optional[str]:
@@ -199,9 +212,7 @@ def get_default_gene_vocab() -> GeneVocab:
     """
     vocab_file = Path(__file__).parent / "default_gene_vocab.json"
     if not vocab_file.exists():
-        logger.info(
-            f"No existing default vocab, will build one and save to {vocab_file}"
-        )
+        logger.info(f"No existing default vocab, will build one and save to {vocab_file}")
         return _build_default_gene_vocab(save_vocab_to=vocab_file)
     logger.info(f"Loading gene vocabulary from {vocab_file}")
     return GeneVocab.from_file(vocab_file)
@@ -219,9 +230,7 @@ def _build_default_gene_vocab(
         save_vocab_to (Path or str): Path to save the vocabulary. If None,
             the vocabulary will not be saved. Default to None.
     """
-    gene_collection_file = (
-        Path(download_source_to) / "human.gene_name_symbol.from_genenames.org.tsv"
-    )
+    gene_collection_file = Path(download_source_to) / "human.gene_name_symbol.from_genenames.org.tsv"
     if not gene_collection_file.exists():
         # download and save file from url
         url = (
@@ -269,13 +278,11 @@ def tokenize_batch(
     """
     if data.shape[1] != len(gene_ids):
         raise ValueError(
-            f"Number of features in data ({data.shape[1]}) does not match "
-            f"number of gene_ids ({len(gene_ids)})."
+            f"Number of features in data ({data.shape[1]}) does not match number of gene_ids ({len(gene_ids)})."
         )
     if mod_type is not None and data.shape[1] != len(mod_type):
         raise ValueError(
-            f"Number of features in data ({data.shape[1]}) does not match "
-            f"number of mod_type ({len(mod_type)})."
+            f"Number of features in data ({data.shape[1]}) does not match number of mod_type ({len(mod_type)})."
         )
 
     tokenized_data = []
@@ -289,16 +296,16 @@ def tokenize_batch(
                 mod_types = mod_type
         elif sample_zero:
             values = row
-            idx_nonzero = np.where(values!=0)[0]
-            idx_zero = np.where(values==0)[0]
+            idx_nonzero = np.where(values != 0)[0]
+            idx_zero = np.where(values == 0)[0]
             # Min of len of nonzero genes and zero genes
-            len_subset_zero = min(int(len(idx_nonzero)*0.4), len(idx_zero))
-            subset_idx_zero = np.random.choice(len(idx_zero), len_subset_zero, replace=False) 
+            len_subset_zero = min(int(len(idx_nonzero) * 0.4), len(idx_zero))
+            subset_idx_zero = np.random.choice(len(idx_zero), len_subset_zero, replace=False)
             idx_zero = idx_zero[subset_idx_zero]
             gene_ids_zero = gene_ids[idx_zero]
             values_zero = values[idx_zero]
             genes = np.concatenate((gene_ids[idx_nonzero], gene_ids_zero), axis=0)
-            values =np.concatenate((values[idx_nonzero], values_zero), axis=0)
+            values = np.concatenate((values[idx_nonzero], values_zero), axis=0)
             if mod_type is not None:
                 mod_types = mod_type
         else:
@@ -321,14 +328,15 @@ def tokenize_batch(
         tokenized_data.append((genes, values, mod_types))
     return tokenized_data
 
+
 def pad_batch(
     batch: List[Tuple],
     max_len: int,
-    vocab: Vocab,
+    vocab: GeneVocab,
     pad_token: str = "<pad>",
     pad_value: int = 0,
     cls_appended: bool = True,
-    vocab_mod: Vocab = None,
+    vocab_mod: GeneVocab = None,
 ) -> Dict[str, torch.Tensor]:
     """
     Pad a batch of data. Returns a list of Dict[gene_id, count].
@@ -336,7 +344,7 @@ def pad_batch(
     Args:
         batch (list): A list of tuple (gene_id, count).
         max_len (int): The maximum length of the batch.
-        vocab (Vocab): The vocabulary containing the pad token.
+        vocab (GeneVocab): The vocabulary containing the pad token.
         pad_token (str): The token to pad with.
 
     Returns:
@@ -372,9 +380,7 @@ def pad_batch(
             gene_ids = torch.cat(
                 [
                     gene_ids,
-                    torch.full(
-                        (max_len - len(gene_ids),), pad_id, dtype=gene_ids.dtype
-                    ),
+                    torch.full((max_len - len(gene_ids),), pad_id, dtype=gene_ids.dtype),
                 ]
             )
             values = torch.cat(
@@ -413,7 +419,7 @@ def tokenize_and_pad_batch(
     data: np.ndarray,
     gene_ids: np.ndarray,
     max_len: int,
-    vocab: Vocab,
+    vocab: GeneVocab,
     pad_token: str,
     pad_value: int,
     append_cls: bool = True,
@@ -421,7 +427,7 @@ def tokenize_and_pad_batch(
     cls_token: str = "<cls>",
     return_pt: bool = True,
     mod_type: np.ndarray = None,
-    vocab_mod: Vocab = None,
+    vocab_mod: GeneVocab = None,
     sample_zero: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """
@@ -487,6 +493,7 @@ def random_mask_value(
         row[mask_idx] = mask_value
     return torch.from_numpy(values).float()
 
+
 def random_mask_gene_value(
     genes: Union[torch.Tensor, np.ndarray],
     values: Union[torch.Tensor, np.ndarray],
@@ -515,13 +522,13 @@ def random_mask_gene_value(
         values = values.clone().detach().numpy()
     else:
         values = values.copy()
-    
+
     if isinstance(genes, torch.Tensor):
         # it is crutial to clone the tensor, otherwise it changes the original tensor
         genes = genes.clone().detach().numpy()
     else:
         genes = genes.copy()
-    
+
     assert len(genes) == len(values)
 
     for i in range(len(genes)):
@@ -532,7 +539,7 @@ def random_mask_gene_value(
 
         n_mask = int(len(non_padding_idx) * mask_ratio)
         mask_idx = np.random.choice(non_padding_idx, n_mask, replace=False)
-        
+
         if sample_zero:
             non_zero_padding_idx = np.where((row != 0) & (row != pad_value))[0]
             n_mask = int(len(non_zero_padding_idx) * mask_ratio)
@@ -542,8 +549,8 @@ def random_mask_gene_value(
 
         # Assign half for gene mask, half for val mask
         if mask_gene_ratio > 0:
-            mask_gene_idx = mask_idx[: int(n_mask*mask_gene_ratio)]
-            mask_val_idx = mask_idx[int(n_mask*mask_gene_ratio) :]
+            mask_gene_idx = mask_idx[: int(n_mask * mask_gene_ratio)]
+            mask_val_idx = mask_idx[int(n_mask * mask_gene_ratio) :]
             gene_row[mask_gene_idx] = mask_gene
             row[mask_val_idx] = mask_value
         else:
