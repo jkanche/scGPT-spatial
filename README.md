@@ -48,3 +48,10 @@ Check out our preprint! https://www.biorxiv.org/content/10.1101/2025.02.05.63671
 ```
 
 ![scGPT-spatial workflow](images/Fig1.png)
+
+<!-- biocsetup-notes -->
+
+## Note
+
+This project has been set up using [BiocSetup](https://github.com/biocpy/biocsetup)
+and [PyScaffold](https://pyscaffold.org/).
